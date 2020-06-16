@@ -76,7 +76,7 @@ function simulate(; seed::Int, dt=0.1, nsteps=10, m_reg=0.4)
     return accept_prob, measurement_dict
 end
 
-function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=0.4)
+function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=0.4, use_fa=true)
     β = 2
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
@@ -89,10 +89,18 @@ function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=
     model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=1., λ=√2, μ=-2.5, m_reg=m_reg)
     randomize!(model)
 
-    dyn = MultiStepFAHamiltonianDynamics(
-        ;N=N, steps=nsteps, faststeps=nfaststeps,
-        dt=dt
-    )
+    if use_fa
+        dyn = MultiStepFAHamiltonianDynamics(
+            ;N=N, steps=nsteps, faststeps=nfaststeps,
+            dt=dt
+        )
+    else
+        dyn = MultiStepHamiltonianDynamics(
+            ;N=N, steps=nsteps, faststeps=nfaststeps,
+            dt=dt
+        )
+    end
+
 
     burnin_samples = 50000
     for step in 1:burnin_samples

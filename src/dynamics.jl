@@ -135,8 +135,11 @@ struct MultiStepFAHamiltonianDynamics <: AbstractFADynamics
     end
 end
 
+# For consistency, all action functions take both SSModel and Dynamics,
+#   even if it's not necessary for computation.
+
 # S_bose = Δτ/2 Σ_τ [ω₀² x_τ² + (x_{τ+1} - x_τ)² / Δτ²]
-function S_bose(m::SSModel)
+function S_bose(m::SSModel, dyn::AbstractDynamics)
     S = 0.0
     for τ = 1:m.N
         x  = m.x[τ]
@@ -146,23 +149,23 @@ function S_bose(m::SSModel)
     return S
 end
 
-function S_inter(dyn::AbstractDynamics)
+function S_inter(m::SSModel, dyn::AbstractDynamics)
     """ Calculates the portion of the action associated to auxiliary variables introduced in HMC.
         Important: dyn.ψ₁, dyn.ψ₂ must be updated outside of this routine.
     """
     (dyn.ϕ₁' * dyn.ψ₁ + dyn.ϕ₂' * dyn.ψ₂) / 2
 end
 
-function S_kinetic(dyn::AbstractFADynamics)
+function S_kinetic(m::SSModel, dyn::AbstractFADynamics)
     (dyn.p' * dyn.Qp) / 2
 end
 
-function S_kinetic(dyn::AbstractDynamics)
-    (dyn.p' * dyn.p) / 2
+function S_kinetic(m::SSModel, dyn::AbstractDynamics)
+    (dyn.p' * dyn.p) / (2 * m.Δτ)
 end
 
 function S_total(m::SSModel, dyn::AbstractDynamics)
-    S_bose(m) + S_inter(dyn) + S_kinetic(dyn)
+    S_bose(m, dyn) + S_inter(m, dyn) + S_kinetic(m, dyn)
 end
 
 function fourier_accelerate!(m::SSModel, x::Vector{Float64}, pow::Float64)
@@ -337,6 +340,82 @@ function sample!(model::SSModel, dyn::MultiStepFAHamiltonianDynamics)
 
     # Try to accept new configuration with Metropolis probability
     H′ = S_total(model, dyn) 
+
+    ΔH = H′ - H
+    prob = min(1, exp(-ΔH))
+
+    if rand(model.rng) < prob
+        return true           # Acceptance
+    else
+        # Copy original field configuration back
+        copy!(model.x, dyn.x)
+        return false          # Rejection
+    end
+end
+
+function sample!(model::SSModel, dyn::MultiStepHamiltonianDynamics)
+    """ Produces a single sample of a field configuration using HMC, by evolving a Hamiltonian
+         by multiple timesteps with a symplectic integrator. This version includes
+         multi-timestepping.
+    """
+    @unpack dt, steps, faststeps, ϕ₁, ϕ₂, ψ₁, ψ₂, F, x, p, R₁, R₂ = dyn
+
+    # Copy phonon field configuration to restore if rejected
+    copy!(x, model.x)
+
+    update_Bτ!(model)
+
+    # Sample an auxiliary field configurations ϕ₁, ϕ₂
+    randn!(model.rng, R₁)
+    apply_hubbard_matrix(model, R₁, ϕ₁; transpose=true)
+    randn!(model.rng, R₂)
+    apply_hubbard_matrix(model, R₂, ϕ₂; transpose=true)
+
+    # Sample an initial momentum configuration
+    randn!(model.rng, p)
+    # To match with FA conventions, need to scale p here
+    p .*= sqrt(model.Δτ)
+
+    # Calculate forces, and update B's, ψ's
+    calc_F_aux_fields!(model, dyn)
+
+    # Calculate initial energy
+    H = S_total(model, dyn)
+
+    # Step p by a half-step in the interaction Hamiltonian to begin the cycle
+    @. p += F * dt / 2
+
+    fastdt = dt / faststeps
+
+    # Evolve x, p under Hamiltonian dynamics using the leapfrog integrator
+    for step in 1:steps
+
+        # Perform a sub-leapfrog integration on the phonon action for faststeps # of steps
+        calc_F_phonon!(model, dyn)
+        # Half-step in Bose Hamiltonian to start cycle
+        @. p += F * fastdt / 2
+
+        for faststep in 1:faststeps
+            @. model.x += p * fastdt / model.Δτ
+
+            calc_F_phonon!(model, dyn)
+
+            @. p += F * fastdt
+        end
+
+        # Back-step by a half-step to re-align times for Bose Hamiltonian
+        @. p -= F * fastdt / 2
+
+        # Step interaction hamiltonian
+        calc_F_aux_fields!(model, dyn)
+        @. p += F * dt
+    end
+
+    # Back-step p by a half-step to re-align times for interaction Hamiltonian
+    @. p -= F * dt / 2
+
+    # Try to accept new configuration with Metropolis probability
+    H′ = S_total(model, dyn)
 
     ΔH = H′ - H
     prob = min(1, exp(-ΔH))
