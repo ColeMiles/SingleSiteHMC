@@ -276,7 +276,6 @@ function sample!(model::SSModel, dyn::MultiStepFAHamiltonianDynamics)
          multi-timestepping.
     """
     @unpack dt, steps, faststeps, ϕ₁, ϕ₂, ψ₁, ψ₂, F, x, p, Qp, R₁, R₂ = dyn
-
     # Copy phonon field configuration to restore if rejected
     copy!(x, model.x)
 
@@ -349,6 +348,7 @@ function sample!(model::SSModel, dyn::MultiStepFAHamiltonianDynamics)
     else
         # Copy original field configuration back
         copy!(model.x, dyn.x)
+        update_Bτ!(model)
         return false          # Rejection
     end
 end
@@ -425,6 +425,7 @@ function sample!(model::SSModel, dyn::MultiStepHamiltonianDynamics)
     else
         # Copy original field configuration back
         copy!(model.x, dyn.x)
+        update_Bτ!(model)
         return false          # Rejection
     end
 end
@@ -489,6 +490,7 @@ function sample!(model::SSModel, dyn::AbstractFADynamics)
     else
         # Copy original field configuration back
         copy!(model.x, dyn.x)
+        update_Bτ!(model)
         return false          # Rejection
     end
 end
@@ -544,6 +546,7 @@ function sample!(model::SSModel, dyn::AbstractDynamics)
     else
         # Copy original field configuration back
         copy!(model.x, dyn.x)
+        update_Bτ!(model)
         return false          # Rejection
     end
 end

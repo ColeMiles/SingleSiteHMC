@@ -87,3 +87,73 @@ function test_force!(model::SSModel, dyn::AbstractDynamics)
         @assert F ≈ Fbrute
     end
 end
+
+function test_energy_conservation(model::SSModel, dyn::MultiStepFAHamiltonianDynamics, nsteps=30)
+    @unpack dt, faststeps, ϕ₁, ϕ₂, F, x, p, Qp, R₁, R₂ = dyn
+
+    # Perform a burn-in first
+    burnin_samples = 25000
+    for step in 1:burnin_samples
+        sample!(model, dyn)
+    end
+
+    update_Bτ!(model)
+
+    # Sample an auxiliary field configurations ϕ₁, ϕ₂
+    randn!(model.rng, R₁)
+    apply_hubbard_matrix(model, R₁, ϕ₁; transpose=true)
+    randn!(model.rng, R₂)
+    apply_hubbard_matrix(model, R₂, ϕ₂; transpose=true)
+
+    # Sample an initial momentum configuration
+    randn!(model.rng, p)
+    fourier_accelerate!(model, p, -0.5)
+
+    # Calculate forces, and update B's, ψ's
+    calc_F_aux_fields!(model, dyn)
+    copy!(Qp, p)
+    fourier_accelerate!(model, Qp, 1.0)
+
+    Es = Vector{Float64}()
+    Eboses = Vector{Float64}()
+    Ekins = Vector{Float64}()
+    Eints = Vector{Float64}()
+    push!(Es, S_total(model, dyn))
+
+    fastdt = dt / faststeps
+
+    # Evolve x, p under Hamiltonian dynamics using the leapfrog integrator
+    for step in 1:nsteps
+        # Step interaction hamiltonian
+        @. p += F * dt / 2
+
+        # Perform a sub-leapfrog integration on the phonon action for faststeps # of steps
+        calc_F_phonon!(model, dyn)
+
+        for faststep in 1:faststeps
+             @. p += F * fastdt / 2
+
+            copy!(Qp, p)
+            fourier_accelerate!(model, Qp, 1.0)
+            @. model.x += Qp * fastdt
+
+            calc_F_phonon!(model, dyn)
+
+            @. p += F * fastdt / 2
+        end
+
+        # Step interaction hamiltonian
+        calc_F_aux_fields!(model, dyn)
+        @. p += F * dt / 2
+
+        # Re-update Qp for Hamiltonian evaluation
+        copy!(Qp, p)
+        fourier_accelerate!(model, Qp, 1.0)
+
+        push!(Es, S_total(model, dyn))
+        push!(Eboses, S_bose(model, dyn))
+        push!(Ekins, S_kinetic(model, dyn))
+        push!(Eints, S_inter(model, dyn))
+    end
+    return Es, Eboses, Ekins, Eints
+end
