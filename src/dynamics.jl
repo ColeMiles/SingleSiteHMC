@@ -265,6 +265,91 @@ function calc_F_phonon!(model::SSModel, dyn::AbstractDynamics)
     end
 end
 
+# TODO: Any better way to abstract this rather than having four sample functions?
+
+function sample!(model::SSModel, dyn::MultiStepFAHamiltonianDynamics)
+    """ Produces a single sample of a field configuration using HMC, by evolving a Hamiltonian
+         by multiple timesteps with a symplectic integrator. This version includes FA, and
+         multi-timestepping.
+    """
+    @unpack dt, steps, faststeps, ϕ₁, ϕ₂, ψ₁, ψ₂, F, x, p, Qp, R₁, R₂ = dyn
+
+    # Copy phonon field configuration to restore if rejected
+    copy!(x, model.x)
+
+    update_Bτ!(model)
+
+    # Sample an auxiliary field configurations ϕ₁, ϕ₂
+    randn!(model.rng, R₁)
+    apply_hubbard_matrix(model, R₁, ϕ₁; transpose=true)
+    randn!(model.rng, R₂)
+    apply_hubbard_matrix(model, R₂, ϕ₂; transpose=true)
+
+    # Sample an initial momentum configuration
+    randn!(model.rng, p)
+    fourier_accelerate!(model, p, -0.5)
+
+    # Calculate forces, and update B's, ψ's
+    calc_F_aux_fields!(model, dyn)
+    copy!(Qp, p)
+    fourier_accelerate!(model, Qp, 1.0)
+
+    # Calculate initial energy
+    H = S_total(model, dyn)
+
+    # Step p by a half-step in the interaction Hamiltonian to begin the cycle
+    @. p += F * dt / 2
+
+    fastdt = dt / faststeps
+
+    # Evolve x, p under Hamiltonian dynamics using the leapfrog integrator
+    for step in 1:steps
+
+        # Perform a sub-leapfrog integration on the phonon action for faststeps # of steps
+        calc_F_phonon!(model, dyn)
+        # Half-step in Bose Hamiltonian to start cycle
+        @. p += F * fastdt / 2
+
+        for faststep in 1:faststeps
+            copy!(Qp, p)
+            fourier_accelerate!(model, Qp, 1.0)
+            @. model.x += Qp * fastdt
+
+            calc_F_phonon!(model, dyn)
+
+            @. p += F * fastdt
+        end
+
+        # Back-step by a half-step to re-align times for Bose Hamiltonian
+        @. p -= F * fastdt / 2
+
+        # Step interaction hamiltonian
+        calc_F_aux_fields!(model, dyn)
+        @. p += F * dt
+    end
+
+    # Back-step p by a half-step to re-align times for interaction Hamiltonian
+    @. p -= F * dt / 2
+
+    # Re-update Qp for Hamiltonian evaluation
+    copy!(Qp, p)
+    fourier_accelerate!(model, Qp, 1.0)
+
+    # Try to accept new configuration with Metropolis probability
+    H′ = S_total(model, dyn) 
+
+    ΔH = H′ - H
+    prob = min(1, exp(-ΔH))
+
+    if rand(model.rng) < prob
+        return true           # Acceptance
+    else
+        # Copy original field configuration back
+        copy!(model.x, dyn.x)
+        return false          # Rejection
+    end
+end
+
 function sample!(model::SSModel, dyn::AbstractFADynamics)
     """ Produces a single sample of a field configuration using HMC, by evolving a Hamiltonian
          by multiple timesteps with a symplectic integrator. This version includes FA.

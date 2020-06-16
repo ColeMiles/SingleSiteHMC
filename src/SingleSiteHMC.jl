@@ -62,13 +62,18 @@ function simulate(; seed::Int, dt=0.1, nsteps=10, m_reg=0.4)
     measurements = [pot_meas, kin_meas, occ_meas, occ_sq_meas, doub_occ_meas]
     exact_functions = [mean_potential, mean_kinetic, mean_occupancy, mean_occupancy_sq, mean_double_occupancy]
 
+    accept_prob = (run_samples - total_num_rejects) / run_samples
+    measurement_dict = Dict{String, Tuple{Float64, Float64}}()
+
     for (obs, meas, exact) in zip(observable_names, measurements, exact_functions)
         (mu, sigma) = binned_statistics(meas, nbins)
+        measurement_dict[obs] = (mu, sigma)
         println(obs)
         println("\tMeasured: $mu ± $sigma")
         println("\tExact: $(exact(model))")
     end
-    println("Average Acceptance Probability: $((run_samples - total_num_rejects) / run_samples)")
+    println("Average Acceptance Probability: $accept_prob)")
+    return accept_prob, measurement_dict
 end
 
 function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=0.4)
@@ -84,9 +89,6 @@ function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=
     model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=1., λ=√2, μ=-2.5, m_reg=m_reg)
     randomize!(model)
 
-    integrator_dt = 0.1
-    integrator_nsteps = 10
-    integrator_faststeps = 10
     dyn = MultiStepFAHamiltonianDynamics(
         ;N=N, steps=nsteps, faststeps=nfaststeps,
         dt=dt
@@ -120,13 +122,19 @@ function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=
     measurements = [pot_meas, kin_meas, occ_meas, occ_sq_meas, doub_occ_meas]
     exact_functions = [mean_potential, mean_kinetic, mean_occupancy, mean_occupancy_sq, mean_double_occupancy]
 
+    accept_prob = (run_samples - total_num_rejects) / run_samples
+    measurement_dict = Dict{String, Tuple{Float64, Float64}}()
+
     for (obs, meas, exact) in zip(observable_names, measurements, exact_functions)
         (mu, sigma) = binned_statistics(meas, nbins)
+        measurement_dict[obs] = (mu, sigma)
         println(obs)
         println("\tMeasured: $mu ± $sigma")
         println("\tExact: $(exact(model))")
     end
-    println("Average Acceptance Probability: $((run_samples - total_num_rejects) / run_samples)")
+    println("Average Acceptance Probability: $accept_prob")
+
+    return accept_prob, measurement_dict
 end
 
 end

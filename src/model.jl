@@ -15,7 +15,11 @@ mutable struct SSModel
     fft_in ::Vector{ComplexF64}
     fft_out::Vector{ComplexF64}
     pfft::FFTW.cFFTWPlan{Complex{Float64},-1,false,1}
-    pifft::AbstractFFTs.ScaledPlan{Complex{Float64},FFTW.cFFTWPlan{Complex{Float64},1,false,1},Float64}
+    @static if Sys.iswindows() 
+        pifft::AbstractFFTs.ScaledPlan{Complex{Float64},FFTW.cFFTWPlan{Complex{Float64},1,false,1,UnitRange{Int64}},Float64}
+    else
+        pifft::AbstractFFTs.ScaledPlan{Complex{Float64},FFTW.cFFTWPlan{Complex{Float64},1,false,1},Float64}
+    end
 
     function SSModel(;  seed::Int, N::Int, Δτ::Float64, ω₀::Float64,
                         λ::Float64, μ::Float64, m_reg::Float64=0.,)
