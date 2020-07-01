@@ -1,6 +1,8 @@
 using Random
 using FFTW
 
+# Temporarily made this mutable for find_μ process
+# TODO: Think of better solution
 mutable struct SSModel
     rng::AbstractRNG
     N::Int

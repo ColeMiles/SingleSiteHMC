@@ -4,6 +4,7 @@ include("model.jl")
 include("dynamics.jl")
 include("measurements.jl")
 include("plotting.jl")
+include("mufinder.jl")
 include("tests.jl")
 
 # Export some stuff
@@ -16,6 +17,7 @@ export simulate, multistep_simulate
 export measure_potential_energy, measure_mean_occupation, measure_mean_sq_occupation
 export measure_kinetic_energy, measure_double_occupation
 export mean_potential, mean_occupancy, mean_occupancy_sq, mean_double_occupancy, mean_kinetic
+export find_μ, plot_μ_finding
 
 # Full runs
 
