@@ -21,8 +21,7 @@ export find_μ, plot_μ_finding
 
 # Full runs
 
-function simulate(; seed::Int, dt=0.1, nsteps=10, m_reg=0.4)
-    β = 2
+function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
     Δτ = β / N
@@ -78,8 +77,7 @@ function simulate(; seed::Int, dt=0.1, nsteps=10, m_reg=0.4)
     return accept_prob, measurement_dict
 end
 
-function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=0.4, use_fa=true)
-    β = 2
+function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfaststeps=4, m_reg=0.4, use_fa=true)
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
     Δτ = β / N
@@ -88,7 +86,7 @@ function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=
     end
     nbins = 10
 
-    model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=1., λ=√2, μ=-2.5, m_reg=m_reg)
+    model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=1., λ=√2, μ=μ, m_reg=m_reg)
     randomize!(model)
 
     if use_fa
@@ -109,7 +107,7 @@ function multistep_simulate(; seed::Int, dt=0.1, nsteps=10, nfaststeps=4, m_reg=
         sample!(model, dyn)
     end
 
-    run_samples = 250000
+    run_samples = 500000
     total_num_rejects = 0
 
     pot_meas = zeros(Float64, run_samples)
