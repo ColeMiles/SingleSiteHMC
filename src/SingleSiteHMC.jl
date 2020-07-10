@@ -77,7 +77,8 @@ function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
     return accept_prob, measurement_dict
 end
 
-function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfaststeps=4, m_reg=0.4, use_fa=true)
+function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfaststeps=4,
+                              m_reg=0.4, use_fa=true)
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
     Δτ = β / N
@@ -100,7 +101,6 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
             dt=dt
         )
     end
-
 
     burnin_samples = 50000
     for step in 1:burnin_samples

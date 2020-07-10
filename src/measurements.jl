@@ -1,4 +1,5 @@
 using Statistics
+using Parameters
 
 #=  Exact Formula =#
 
@@ -101,6 +102,26 @@ function measure_double_occupation(m::SSModel)
     avg_n = 1 - 1 / (1 + prod(m.B))
     return avg_n^2
 end
+
+#= Stochastic Measurement Routines =#
+
+function sto_measure_occupations(m::SSModel)
+    """ Measures both ⟨N⟩, ⟨N²⟩ using a stochastic estimator
+    """
+    @unpack x, R, α₁, α₂ = m
+    L = length(x)
+
+    randn!(m.rng, R)
+    apply_hubbard_inverse(m, R, α₁)
+    apply_hubbard_inverse(m, R, α₂; transpose=true)
+
+    N_measure = (2. / L) * (R' * (R - α₁))
+    N²_measure = N_measure ^ 2 + (2. / L^2) * (-sum((2R - α₁ - α₂).^2) + α₂' * (R - α₁))
+
+    return (N_measure, N²_measure)
+end
+
+#= Binned Statistics Routines =#
 
 """
 Calculates the average and binned standard deviation of a set of data.

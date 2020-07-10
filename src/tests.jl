@@ -157,3 +157,60 @@ function test_energy_conservation(model::SSModel, dyn::MultiStepFAHamiltonianDyn
     end
     return Es, Eboses, Ekins, Eints
 end
+
+function test_stochastic_measurements(;seed::Int, β=2., μ=-2.0, dt=0.1, nsteps=10, nfaststeps=4, m_reg=0.4)
+    Δτ_target = 0.1
+    N = round(Int, β/Δτ_target)
+    Δτ = β / N
+    if Δτ ≠ Δτ_target
+        println("Modified Δτ from $Δτ_target to $Δτ")
+    end
+    nbins = 10
+
+    model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=1., λ=√2, μ=μ, m_reg=m_reg)
+    randomize!(model)
+
+    dyn = MultiStepFAHamiltonianDynamics(
+        ;N=N, steps=nsteps, faststeps=nfaststeps,
+        dt=dt
+    )
+
+    burnin_samples = 50000
+    for step in 1:burnin_samples
+        sample!(model, dyn)
+    end
+
+    run_samples = 500000
+    total_num_rejects = 0
+
+    occ_meas = zeros(Float64, run_samples)
+    occ_sq_meas = zeros(Float64, run_samples)
+    sto_occ_meas = zeros(Float64, run_samples)
+    sto_occ_sq_meas = zeros(Float64, run_samples)
+
+    for step in 1:run_samples
+        total_num_rejects += !sample!(model, dyn)
+
+        occ_meas[step] = measure_mean_occupation(model)
+        occ_sq_meas[step] = measure_mean_sq_occupation(model)
+        (sto_N, sto_N²) = sto_measure_occupations(model)
+        sto_occ_meas[step] = sto_N
+        sto_occ_sq_meas[step] = sto_N²
+    end
+
+    observable_names = ["Occupancy", "Occupancy²", "Sto. Occupancy", "Sto. Occupancy²"]
+    measurements = [occ_meas, occ_sq_meas, sto_occ_meas, sto_occ_sq_meas]
+    exact_functions = [mean_occupancy, mean_occupancy_sq, mean_occupancy, mean_occupancy_sq]
+
+    accept_prob = (run_samples - total_num_rejects) / run_samples
+    measurement_dict = Dict{String, Tuple{Float64, Float64}}()
+
+    for (obs, meas, exact) in zip(observable_names, measurements, exact_functions)
+        (mu, sigma) = binned_statistics(meas, nbins)
+        measurement_dict[obs] = (mu, sigma)
+        println(obs)
+        println("\tMeasured: $mu ± $sigma")
+        println("\tExact: $(exact(model))")
+    end
+    println("Average Acceptance Probability: $accept_prob")
+end

@@ -36,13 +36,13 @@ function forgetful_avg(data::Vector{Float64}, c::Float64, prev_val::Float64)
 end
 
 # Dummy mean function with extra argument to match what's expected by find_μ
-function mean(data::Vector{Float64}, prev_val::Float64)
+function dummy_mean(data::Vector{Float64}, prev_val::Float64)
     return mean(data)
 end
 
 function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64, 
-                nsteps::Int64; ninit::Int64=10,
-                weight_fn::Function=mean)
+                nsteps::Int64; ninit::Int64=10, stochastic=false,
+                weight_fn::Function=dummy_mean)
     """ Performs the full μ-finding algorithm to attempt to discover the μ
          which places the given model at the desired N. Progresses only for 
          the given number of steps.
@@ -96,8 +96,12 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
         accept = sample!(model, dyn)
         push!(accepts, accept)
 
-        N = measure_mean_occupation(model)
-        N² = measure_mean_sq_occupation(model)
+        if stochastic
+            (N, N²) = sto_measure_occupations(model)
+        else
+            N = measure_mean_occupation(model)
+            N² = measure_mean_sq_occupation(model)
+        end
 
         push!(N_traj, N)
         push!(κ_traj, β * (N² - 2 * N * N̄ + N̄^2))
@@ -114,7 +118,8 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
     )
 end
 
-function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; weight_fn::Function=mean)
+function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; stochastic=false,
+                      weight_fn::Function=dummy_mean)
     """ Just like multistep_simulate, but records more details about observable trajectorie trajectories.
     """
     β = model.N * model.Δτ
@@ -144,8 +149,12 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; wei
     for step in 1:nsteps
         accept = sample!(model, dyn)
 
-        N = measure_mean_occupation(model)
-        N² = measure_mean_sq_occupation(model)
+        if stochastic
+            (N, N²) = sto_measure_occupations(model)
+        else
+            N = measure_mean_occupation(model)
+            N² = measure_mean_sq_occupation(model)
+        end
         κ = β * (N² - 2 * N * N̄ + N̄^2)
         push!(N_traj, N)
         push!(κ_traj, β * (N² - 2 * N * N̄ + N̄^2))
@@ -187,8 +196,9 @@ function plot_μ_finding(N_target::Float64, μ_target::Float64, results::Results
     plot!([nburn], seriestype=:vline, linestyle=:dash, label="End Burn", linecolor=:black) 
 end
 
-function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μ=0.0, m_reg=0.4, ninit=10,
-                      dt=0.8, nsteps=4, nfaststeps=8, N_target=1.0, nsearch=500000)
+function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μ=-1.0, m_reg=0.4, ninit=10,
+                      dt=0.8, nsteps=4, nfaststeps=8, N_target=1.0, nsearch=500000, plot=true,
+                      stochastic=false)
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
     Δτ = β / N
@@ -207,10 +217,12 @@ function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μ=0.0, m_re
     forgetful_c = 0.5
     avg_func = (data, prev_val) -> forgetful_avg(data, forgetful_c, prev_val)
     results = find_μ(model, dyn, N_target, nsearch,
-                     ninit=ninit, weight_fn=avg_func)
+                     ninit=ninit, stochastic=stochastic, weight_fn=avg_func)
 
     μ_target = numeric_μ(β, N_target; ω₀=ω₀, λ=λ)
-    plot_μ_finding(N_target, μ_target, results)
+    if plot
+        plot_μ_finding(N_target, μ_target, results)
+    end
 
     return results
 end

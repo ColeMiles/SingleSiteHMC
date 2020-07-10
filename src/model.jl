@@ -14,6 +14,11 @@ mutable struct SSModel
     x::Vector{Float64}
     B::Vector{Float64}
 
+    # Temporary vectors used in stochastic measurements
+    R ::Vector{Float64}
+    α₁::Vector{Float64}
+    α₂::Vector{Float64}
+
     fft_in ::Vector{ComplexF64}
     fft_out::Vector{ComplexF64}
     pfft::FFTW.cFFTWPlan{Complex{Float64},-1,false,1}
@@ -32,8 +37,11 @@ mutable struct SSModel
         fft_out = zeros(ComplexF64, N)
         pfft = plan_fft(fft_in)
         pifft = plan_ifft(fft_in)
+        R = zeros(Float64, N)
+        α₁ = zeros(Float64, N)
+        α₂ = zeros(Float64, N)
 
-        return new(rng, N, Δτ, ω₀, λ, μ, m_reg, x, B, fft_in, fft_out, pfft, pifft)
+        return new(rng, N, Δτ, ω₀, λ, μ, m_reg, x, B, R, α₁, α₂, fft_in, fft_out, pfft, pifft)
     end
 end
 
@@ -48,7 +56,7 @@ function update_Bτ!(m::SSModel)
     end
 end
 
-# Builds the M matrix then multiplies v by it
+# Applys the M matrix (constructed from m.B's) to a vector
 function apply_hubbard_matrix(m::SSModel, v::Vector{Float64}, res::Vector{Float64}; transpose=false)
     if !transpose
         res[1] = 1 * v[1] + m.B[1] * v[m.N]
@@ -64,6 +72,7 @@ function apply_hubbard_matrix(m::SSModel, v::Vector{Float64}, res::Vector{Float6
     return
 end
 
+# Applys the M⁻¹ matrix (constructed from m.B's) to a vector
 function apply_hubbard_inverse(m::SSModel, v::Vector{Float64}, res::Vector{Float64}; transpose=false)
     denom = 1 + prod(m.B) # needs to be generalized for multi-site
 
