@@ -214,3 +214,11 @@ function test_stochastic_measurements(;seed::Int, β=2., μ=-2.0, dt=0.1, nsteps
     end
     println("Average Acceptance Probability: $accept_prob")
 end
+
+function test_stochastic_correctness(;seed::Int, β=2., n_avg=10)
+    dt = 0.1
+    nsteps = 10
+    nfaststeps = 4
+    m_reg = 0.4
+    μ_init = -1.0
+end

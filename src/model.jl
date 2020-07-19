@@ -15,6 +15,7 @@ mutable struct SSModel
     B::Vector{Float64}
 
     # Temporary vectors used in stochastic measurements
+    sto_rng::AbstractRNG
     R ::Vector{Float64}
     α₁::Vector{Float64}
     α₂::Vector{Float64}
@@ -37,11 +38,12 @@ mutable struct SSModel
         fft_out = zeros(ComplexF64, N)
         pfft = plan_fft(fft_in)
         pifft = plan_ifft(fft_in)
+        sto_rng = MersenneTwister(seed+1)
         R = zeros(Float64, N)
         α₁ = zeros(Float64, N)
         α₂ = zeros(Float64, N)
 
-        return new(rng, N, Δτ, ω₀, λ, μ, m_reg, x, B, R, α₁, α₂, fft_in, fft_out, pfft, pifft)
+        return new(rng, N, Δτ, ω₀, λ, μ, m_reg, x, B, sto_rng, R, α₁, α₂, fft_in, fft_out, pfft, pifft)
     end
 end
 

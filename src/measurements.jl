@@ -56,6 +56,15 @@ function mean_double_occupancy(m::SSModel)
     return exp2 / denom
 end
 
+function mean_kappa(m::SSModel)
+    β = m.N * m.Δτ
+    exp1 = exp(β * (m.λ^2 / (2 * m.ω₀^2) + m.μ))
+    exp2 = exp(2 * β * (m.λ^2 / m.ω₀^2 + m.μ))
+    numer = 2β * ((1 + 2exp1 + exp2) * (exp1 + 2exp2) - (2exp1 + 2exp2) * (exp1 + exp2))
+    denom = (1 + 2exp1 + exp2)^2
+    return numer / denom
+end
+
 #= Measurement Routines =#
 
 function measure_potential_energy(m::SSModel)
@@ -105,20 +114,28 @@ end
 
 #= Stochastic Measurement Routines =#
 
-function sto_measure_occupations(m::SSModel)
+function sto_measure_occupations(m::SSModel; n_avg=1)
     """ Measures both ⟨N⟩, ⟨N²⟩ using a stochastic estimator
     """
     @unpack x, R, α₁, α₂ = m
     L = length(x)
 
-    randn!(m.rng, R)
-    apply_hubbard_inverse(m, R, α₁)
-    apply_hubbard_inverse(m, R, α₂; transpose=true)
+    N_measure_acc = 0.0
+    N²_measure_acc = 0.0
 
-    N_measure = (2. / L) * (R' * (R - α₁))
-    N²_measure = N_measure ^ 2 + (2. / L^2) * (-sum((2R - α₁ - α₂).^2) + α₂' * (R - α₁))
+    for _ in 1:n_avg
+        randn!(m.sto_rng, R)
+        apply_hubbard_inverse(m, R, α₁)
+        apply_hubbard_inverse(m, R, α₂; transpose=true)
 
-    return (N_measure, N²_measure)
+        N_measure = (2. / L) * (R' * (R - α₁))
+        N²_measure = N_measure ^ 2 + (2. / L^2) * (-sum((2R - α₁ - α₂).^2) + α₂' * (R - α₁))
+
+        N_measure_acc += N_measure
+        N²_measure_acc += N²_measure
+    end
+
+    return (N_measure_acc / n_avg, N²_measure_acc / n_avg)
 end
 
 #= Binned Statistics Routines =#
