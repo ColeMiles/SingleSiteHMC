@@ -18,15 +18,36 @@ struct Results
     accepts         :: Vector{Bool}
 end
 
+function cat_results(res_a::Results, res_b::Results)
+    μ_traj = cat(res_a.μ_traj, res_b.μ_traj)
+    N_traj = cat(res_a.N_traj, res_b.N_traj)
+    κ_traj = cat(res_a.κ_traj, res_b.κ_traj)
+    μ̄_traj = cat(res_a.μ̄_traj, res_b.μ̄_traj)
+    N̄_traj = cat(res_a.N̄_traj, res_b.N̄_traj)
+    κ̄_traj = cat(res_a.κ̄_traj, res_b.κ̄_traj)
+    κ_var_traj = cat(res_a.κ_var_traj, res_b.κ_var_traj)
+    phonon_pot_traj = cat(res_a.phonon_pot_traj, res_b.phonon_pot_traj)
+    phonon_kin_traj = cat(res_a.phonon_kin_traj, res_b.phonon_kin_traj)
+    N²_traj = cat(res_a.N²_traj, res_b.N²_traj)
+    accepts = cat(res_a.accepts, res_b.accepts)
+    Results(
+        μ_traj, N_traj, κ_traj,
+        μ̄_traj, N̄_traj, κ̄_traj,
+        κ_var_traj, phonon_pot_traj,
+        phonon_kin_traj, N²_traj,
+        accepts
+    )
+end
+
 #= Linear-time "forgetful" mean and variance : For comparison =#
 
 function forgetful_mean(data::Vector{Float64}, c::Float64)
-    cutoff = ceil(Int64, c * length(data))
+    cutoff = ceil(Int64, (1.0 - c) * length(data))
     return mean(data[cutoff:end])
 end
 
 function forgetful_var(data::Vector{Float64}, c::Float64)
-    cutoff = ceil(Int64, c * length(data))
+    cutoff = ceil(Int64, (1.0 - c) * length(data))
     return var(data[cutoff:end]; corrected=true)
 end
 
@@ -34,8 +55,8 @@ end
 #= These assume that only one update has happened since the last call =#
 
 function forgetful_mean(data::Vector{Float64}, c::Float64, prev_mean::Float64)
-    cutoff = ceil(Int64, c * length(data))
-    prev_cutoff = ceil(Int64, c * (length(data) - 1))
+    cutoff = ceil(Int64, (1.0 - c) * length(data))
+    prev_cutoff = ceil(Int64, (1.0 - c) * (length(data) - 1))
 
     new_mean = (length(data) - prev_cutoff) * prev_mean
     if prev_cutoff != cutoff
@@ -48,8 +69,8 @@ end
 
 # Welford's online algorithm
 function forgetful_mean_var(data::Vector{Float64}, c::Float64, prev_mean::Float64, prev_var::Float64)
-    cutoff = ceil(Int64, c * length(data))
-    prev_cutoff = ceil(Int64, c * (length(data) - 1))
+    cutoff = ceil(Int64, (1.0 - c) * length(data))
+    prev_cutoff = ceil(Int64, (1.0 - c) * (length(data) - 1))
 
     new_pt = data[end]
 
@@ -74,14 +95,9 @@ function forgetful_mean_var(data::Vector{Float64}, c::Float64, prev_mean::Float6
     return (new_mean, new_var)
 end
 
-# Dummy mean function with extra argument to match what's expected by find_μ
-function dummy_mean(data::Vector{Float64}, prev_val::Float64)
-    return mean(data)
-end
-
 function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64, 
                 nsteps::Int64; ninit::Int64=10, stochastic=false, n_sto_avg=1,
-                forgetful_c::Float64=0.5)
+                forgetful_c::Float64=0.5, exact=false)
     """ Performs the full μ-finding algorithm to attempt to discover the μ
          which places the given model at the desired N. Progresses only for 
          the given number of steps.
@@ -139,7 +155,10 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
         accept = sample!(model, dyn)
         push!(accepts, accept)
 
-        if stochastic
+        if exact
+            N = mean_occupancy(model) + sqrt(0.2) * randn()
+            N² = mean_occupancy_sq(model) + sqrt(0.2) * randn()
+        elseif stochastic
             (N, N²) = sto_measure_occupations(model; n_avg=n_sto_avg)
         else
             N = measure_mean_occupation(model)
@@ -172,21 +191,21 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
     κ_var = 0.0
 
     μ_traj = fill(model.μ, nsteps)
-    N_traj = [N̄]
-    κ_traj = [κ̄]
-    μ̄_traj = fill(model.μ, nsteps)
-    N̄_traj = [N̄]
-    κ̄_traj = [κ̄]
-    κ_var_traj = [0.0]
-    phonon_pot_traj = [measure_potential_energy(model)]
-    phonon_kin_traj = [measure_kinetic_energy(model)]
-    N²_traj = [measure_mean_sq_occupation(model)]
-    accept_traj = [true]
+    N_traj = fill(targetN, ninit)
+    κ_traj = fill(1.0, ninit)
+    μ̄_traj = Vector{Float64}()
+    N̄_traj = Vector{Float64}()
+    κ̄_traj = Vector{Float64}()
+    κ_var_traj = Vector{Float64}()
+    phonon_pot_traj = Vector{Float64}()
+    phonon_kin_traj = Vector{Float64}()
+    N²_traj = Vector{Float64}()
+    accept_traj = Vector{Bool}()
     sizehint!(N_traj, nsteps+1)
     sizehint!(κ_traj, nsteps+1)
     sizehint!(N̄_traj, nsteps+1)
     sizehint!(κ̄_traj, nsteps+1)
-    sizehint!(κ̄_var_traj, nsteps)
+    sizehint!(κ_var_traj, nsteps)
     sizehint!(phonon_pot_traj, nsteps+1)
     sizehint!(phonon_kin_traj, nsteps+1)
     sizehint!(N²_traj, nsteps+1)
@@ -201,9 +220,10 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
             N = measure_mean_occupation(model)
             N² = measure_mean_sq_occupation(model)
         end
+
         κ = β * (N² - 2 * N * N̄ + N̄^2)
         push!(N_traj, N)
-        push!(κ_traj, β * (N² - 2 * N * N̄ + N̄^2))
+        push!(κ_traj, κ)
 
         N̄ = forgetful_mean(N_traj, forgetful_c, N̄)
         (κ̄, κ_var) = forgetful_mean_var(κ_traj, forgetful_c, κ̄, κ_var)
@@ -219,7 +239,7 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
 
     return Results(
         μ_traj, N_traj, κ_traj,
-        μ̄_traj, N̄_traj, κ̄_traj, κ̄_var_traj,
+        μ̄_traj, N̄_traj, κ̄_traj, κ_var_traj,
         phonon_pot_traj, phonon_kin_traj, N²_traj,
         accept_traj
     )
@@ -259,7 +279,7 @@ end
 
 function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0, m_reg=0.4, ninit=10,
                       dt=0.8, nsteps=4, nfaststeps=8, N_target=1.0, nsearch=500000, plot=true,
-                      stochastic=false, n_sto_avg=1)
+                      stochastic=false, n_sto_avg=1, exact=false, forgetful_c=0.5)
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
     Δτ = β / N
@@ -275,13 +295,13 @@ function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0,
         dt=dt
     )
 
-    forgetful_c = 0.5
     results = find_μ(model, dyn, N_target, nsearch,
                      ninit=ninit, stochastic=stochastic,
-                     n_sto_avg=n_sto_avg, forgetful_c=forgetful_c)
+                     n_sto_avg=n_sto_avg, forgetful_c=forgetful_c, exact=exact)
 
     μ_target = numeric_μ(β, N_target; ω₀=ω₀, λ=λ)
-    κ_target = mean_kappa(model)
+    target_model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=ω₀, λ=λ, μ=μ_target, m_reg=m_reg)
+    κ_target = mean_kappa(target_model)
     if plot
         plot_μ_finding(N_target, μ_target, κ_target, results)
     end
