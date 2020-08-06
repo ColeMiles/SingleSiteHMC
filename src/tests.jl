@@ -215,10 +215,41 @@ function test_stochastic_measurements(;seed::Int, β=2., μ=-2.0, dt=0.1, nsteps
     println("Average Acceptance Probability: $accept_prob")
 end
 
-function test_stochastic_correctness(;seed::Int, β=2., n_avg=10)
-    dt = 0.1
-    nsteps = 10
-    nfaststeps = 4
-    m_reg = 0.4
-    μ_init = -1.0
+function test_update_μ_stochastic(;seed=12345, β=2., μinit=-1., targetN=1.)
+    Δτ_target = 0.1
+    N = round(Int, β/Δτ_target)
+    Δτ = β / N
+
+    model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=1., λ=√2, μ=μinit, m_reg=0.4)
+    randomize!(model)
+
+    dyn = MultiStepFAHamiltonianDynamics(
+        ;N=N, steps=4, faststeps=8,
+        dt=0.8
+    )
+
+    tuner = MuTuner(model.μ, targetN, β, 0.5)
+
+    μ̄_traj = Vector{Float64}()
+    sizehint!(μ̄_traj, 100000)
+
+    μ̄ = model.μ
+
+    M⁻¹R = zeros(length(model.R))
+    M⁻ᵀR = zeros(length(model.R))
+
+    for it in 1:100000
+        sample!(model, dyn)
+        
+        randn!(model.sto_rng, model.R)
+        apply_hubbard_inverse(model, model.R, M⁻¹R)
+        apply_hubbard_inverse(model, model.R, M⁻ᵀR; transpose=true)
+
+        new_μ = update_μ!(tuner, model.R, M⁻¹R, M⁻ᵀR)
+        model.μ = new_μ
+
+        push!(μ̄_traj, tuner.μ̄)
+    end
+
+    return μ̄_traj
 end

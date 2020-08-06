@@ -18,6 +18,69 @@ struct Results
     accepts         :: Vector{Bool}
 end
 
+mutable struct MuTuner
+    μ_traj      :: Vector{Float64}
+    N_traj      :: Vector{Float64}
+    κ_traj      :: Vector{Float64}
+    forgetful_c :: Float64
+    μ           :: Float64
+    β           :: Float64
+    target_N    :: Float64
+    μ̄           :: Float64
+    N̄           :: Float64
+    κ̄           :: Float64
+    κ_var       :: Float64
+
+    function MuTuner(init_μ::Float64, target_N::Float64, β::Float64, forgetful_c::Float64; ninit::Int64=10)
+        μ_traj = fill(init_μ, ninit)
+        N_traj = fill(target_N, ninit)
+        κ_traj = fill(1.0, ninit)
+
+        return new(
+            μ_traj,
+            N_traj,
+            κ_traj,
+            forgetful_c,
+            init_μ,
+            β,
+            target_N,
+            init_μ,
+            target_N,
+            1.0,
+            0.0
+        )
+    end
+end
+
+
+function update_μ!(tuner::MuTuner, N::Float64, N²::Float64) :: Float64
+    """ Given a MuTuner, and a new set of measurements for N, N²,
+         updates the MuTuner and returns the new value of μ.
+    """
+    @unpack μ_traj, N_traj, κ_traj, forgetful_c, β, target_N = tuner
+
+    κ = β * (N² - 2 * N * tuner.N̄ + tuner.N̄^2)
+    push!(N_traj, N)
+    push!(κ_traj, κ)
+
+    tuner.μ̄ = forgetful_mean(μ_traj, forgetful_c, tuner.μ̄)
+    tuner.N̄ = forgetful_mean(N_traj, forgetful_c, tuner.N̄)
+    (tuner.κ̄, tuner.κ_var) = forgetful_mean_var(κ_traj, forgetful_c, tuner.κ̄, tuner.κ_var)
+
+    new_μ = tuner.μ̄ + (target_N - tuner.N̄) / max(tuner.κ̄, sqrt(tuner.κ_var) / sqrt(length(κ_traj)))
+    tuner.μ = new_μ
+    push!(μ_traj, new_μ)
+
+    return new_μ
+end
+
+function update_μ!(tuner::MuTuner, R::Vector{Float64}, M⁻¹R::Vector{Float64}, M⁻ᵀR::Vector{Float64}) :: Float64
+    L = length(R)
+    N = (2 / L) * (R' * (R - M⁻¹R))
+    N² = N^2 + (2 / L^2) * (-sum((2R - M⁻¹R - M⁻ᵀR).^2) + M⁻ᵀR' * (R - M⁻¹R))
+    return update_μ!(tuner, N, N²)
+end
+
 function cat_results(res_a::Results, res_b::Results)
     μ_traj = cat(res_a.μ_traj, res_b.μ_traj)
     N_traj = cat(res_a.N_traj, res_b.N_traj)
@@ -106,13 +169,7 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
     """
     β = model.Δτ * model.N
 
-    # Initialization routine
-    μ_traj = fill(model.μ, ninit)
-    N_traj = fill(targetN, ninit)
-    κ_traj = fill(1.0, ninit)
-    sizehint!(μ_traj, ninit+nsteps)
-    sizehint!(N_traj, ninit+nsteps)
-    sizehint!(κ_traj, ninit+nsteps)
+    tuner = MuTuner(model.μ, targetN, β, forgetful_c; ninit=ninit)
 
     μ̄_traj = Vector{Float64}()
     N̄_traj = Vector{Float64}()
@@ -138,20 +195,6 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
 
     # Main μ-tuning algorithm
     for it in 1:nsteps
-        μ̄ = forgetful_mean(μ_traj, forgetful_c, μ̄)
-        N̄ = forgetful_mean(N_traj, forgetful_c, N̄)
-        (κ̄, κ_var) = forgetful_mean_var(κ_traj, forgetful_c, κ̄, κ_var)
-
-        push!(μ̄_traj, μ̄)
-        push!(N̄_traj, N̄)
-        push!(κ̄_traj, κ̄)
-        push!(κ_var_traj, κ_var)
-
-        new_μ = μ̄ + (targetN - N̄) / max(κ̄, sqrt(κ_var) / sqrt(length(κ̄_traj)))
-        # new_μ = μ̄ + (targetN - N̄) / κ̄
-        model.μ = new_μ
-        push!(μ_traj, new_μ)
-
         accept = sample!(model, dyn)
         push!(accepts, accept)
 
@@ -165,15 +208,21 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
             N² = measure_mean_sq_occupation(model)
         end
 
-        push!(N_traj, N)
-        push!(κ_traj, β * (N² - 2 * N * N̄ + N̄^2))
+        new_μ = update_μ!(tuner, N, N²)
+        model.μ = new_μ
+
+        # Record a lot of measurements we want to track
+        push!(μ̄_traj, tuner.μ̄)
+        push!(N̄_traj, tuner.N̄)
+        push!(κ̄_traj, tuner.κ̄)
+        push!(κ_var_traj, tuner.κ_var)
         push!(phonon_pot_traj, measure_potential_energy(model))
         push!(phonon_kin_traj, measure_kinetic_energy(model))
         push!(N²_traj, N²)
     end
 
     return Results(
-        μ_traj, N_traj, κ_traj,
+        tuner.μ_traj, tuner.N_traj, tuner.κ_traj,
         μ̄_traj, N̄_traj, κ̄_traj, κ_var_traj,
         phonon_pot_traj, phonon_kin_traj, N²_traj,
         accepts
