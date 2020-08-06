@@ -40,7 +40,7 @@ function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
         sample!(model, dyn)
     end
 
-    run_samples = 250000
+    run_samples = 2000000
     total_num_rejects = 0
 
     pot_meas = zeros(Float64, run_samples)
@@ -48,6 +48,7 @@ function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
     occ_meas = zeros(Float64, run_samples)
     occ_sq_meas = zeros(Float64, run_samples)
     doub_occ_meas = zeros(Float64, run_samples)
+    green_meas = zeros(Float64, N, run_samples)
 
     for step in 1:run_samples
         total_num_rejects += !sample!(model, dyn)
@@ -57,6 +58,7 @@ function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
         occ_meas[step] = measure_mean_occupation(model)
         occ_sq_meas[step] = measure_mean_sq_occupation(model)
         doub_occ_meas[step] = measure_double_occupation(model)
+        green_meas[1:end, step] .= measure_electron_greens(model)
     end
 
     observable_names = ["Phonon Potential", "Phonon Kinetic", "Occupancy", "Occupancy²", "Doub. Occupancy"]
@@ -64,8 +66,9 @@ function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
     exact_functions = [mean_potential, mean_kinetic, mean_occupancy, mean_occupancy_sq, mean_double_occupancy]
 
     accept_prob = (run_samples - total_num_rejects) / run_samples
-    measurement_dict = Dict{String, Tuple{Float64, Float64}}()
+    measurement_dict = Dict{String, Any}()
 
+    # Measurement reporting
     for (obs, meas, exact) in zip(observable_names, measurements, exact_functions)
         (mu, sigma) = binned_statistics(meas, nbins)
         measurement_dict[obs] = (mu, sigma)
@@ -73,17 +76,31 @@ function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
         println("\tMeasured: $mu ± $sigma")
         println("\tExact: $(exact(model))")
     end
-    println("Average Acceptance Probability: $accept_prob)")
+    println("Average Acceptance Probability: $accept_prob")
+
+    # Green's measurement reporting
+    G_μ, G_σ = zeros(N), zeros(N)
+    println("Green's Functions")
+    println("\tΔ\tG(Δ)\t\t\t\t\t\tExact")
+    for Δ in 0:N-1
+        GΔ = green_meas[Δ+1, 1:end]
+        (mu, sigma) = binned_statistics(GΔ, nbins)
+        G_μ[Δ+1] = mu
+        G_σ[Δ+1] = sigma
+        exact = exact_greens(model, Δ * Δτ)
+        println("\t$(Δ)\t$(mu) ± $(sigma)\t$(exact)")
+    end
+    measurement_dict["Electron Greens"] = (G_μ, G_σ)
+
     return accept_prob, measurement_dict
 end
 
 function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfaststeps=4,
-                              m_reg=0.4, use_fa=true)
-    Δτ_target = 0.1
-    N = round(Int, β/Δτ_target)
+                              m_reg=0.4, use_fa=true, dτ_target=0.1)
+    N = round(Int, β/dτ_target)
     Δτ = β / N
-    if Δτ ≠ Δτ_target
-        println("Modified Δτ from $Δτ_target to $Δτ")
+    if Δτ ≠ dτ_target
+        println("Modified Δτ from $dτ_target to $Δτ")
     end
     nbins = 10
 
@@ -102,12 +119,12 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
         )
     end
 
-    burnin_samples = 50000
+    burnin_samples = 100000
     for step in 1:burnin_samples
         sample!(model, dyn)
     end
 
-    run_samples = 500000
+    run_samples = 1000000
     total_num_rejects = 0
 
     pot_meas = zeros(Float64, run_samples)
@@ -115,6 +132,8 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
     occ_meas = zeros(Float64, run_samples)
     occ_sq_meas = zeros(Float64, run_samples)
     doub_occ_meas = zeros(Float64, run_samples)
+    electron_green_meas = zeros(Float64, N, run_samples)
+    phonon_green_meas = zeros(Float64, N, run_samples)
 
     for step in 1:run_samples
         total_num_rejects += !sample!(model, dyn)
@@ -124,6 +143,8 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
         occ_meas[step] = measure_mean_occupation(model)
         occ_sq_meas[step] = measure_mean_sq_occupation(model)
         doub_occ_meas[step] = measure_double_occupation(model)
+        electron_green_meas[1:end, step] .= measure_electron_greens(model)
+        phonon_green_meas[1:end, step] .= measure_phonon_greens(model)
     end
 
     observable_names = ["Phonon Potential", "Phonon Kinetic", "Occupancy", "Occupancy²", "Doub. Occupancy"]
@@ -131,7 +152,7 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
     exact_functions = [mean_potential, mean_kinetic, mean_occupancy, mean_occupancy_sq, mean_double_occupancy]
 
     accept_prob = (run_samples - total_num_rejects) / run_samples
-    measurement_dict = Dict{String, Tuple{Float64, Float64}}()
+    measurement_dict = Dict{String, Any}()
 
     for (obs, meas, exact) in zip(observable_names, measurements, exact_functions)
         (mu, sigma) = binned_statistics(meas, nbins)
@@ -141,6 +162,32 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
         println("\tExact: $(exact(model))")
     end
     println("Average Acceptance Probability: $accept_prob")
+
+    # Electron Green's measurement reporting
+    G_μ, G_σ = zeros(N), zeros(N)
+    println("Electron Green's Functions")
+    println("\tΔ\tG(Δ)\t\t\t\t\t\tExact")
+    for Δ in 0:N-1
+        GΔ = electron_green_meas[Δ+1, 1:end]
+        (mu, sigma) = binned_statistics(GΔ, nbins)
+        G_μ[Δ+1] = mu
+        G_σ[Δ+1] = sigma
+        exact = exact_greens(model, Δ * Δτ)
+        println("\t$(Δ)\t$(mu) ± $(sigma)\t$(exact)")
+    end
+    measurement_dict["Electron Greens"] = (copy(G_μ), copy(G_σ))
+
+    # Phonon Green's measurement reporting
+    println("Phonon Green's Functions")
+    println("\tΔ\tG(Δ)\t\t\t\t\t\tExact")
+    for Δ in 0:N-1
+        GΔ = phonon_green_meas[Δ+1, 1:end]
+        (mu, sigma) = binned_statistics(GΔ, nbins)
+        G_μ[Δ+1] = mu
+        G_σ[Δ+1] = sigma
+        println("\t$(Δ)\t$(mu) ± $(sigma)\t?")
+    end
+    measurement_dict["Phonon Greens"] = (copy(G_μ), copy(G_σ))
 
     return accept_prob, measurement_dict
 end

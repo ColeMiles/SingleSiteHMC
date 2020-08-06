@@ -65,6 +65,16 @@ function mean_kappa(m::SSModel)
     return numer / denom
 end
 
+function exact_greens(m::SSModel, τ::Float64)
+    @unpack μ, λ, ω₀, Δτ, N = m
+    β = N * Δτ
+
+    numer_fact1 = exp(τ * μ + λ^2 * τ^2 / (2 * β * ω₀^2))
+    numer_fact2 = exp((β + τ) * μ + (β/2) * (λ/ω₀ * (1 + τ/β))^2)
+    denom = 1 + 2exp(β * (λ^2/(2*ω₀^2) + μ)) + exp(2 * β * (λ^2/ω₀^2 + μ))
+    return (numer_fact1 + numer_fact2) / denom
+end
+
 #= Measurement Routines =#
 
 function measure_potential_energy(m::SSModel)
@@ -110,6 +120,117 @@ function measure_double_occupation(m::SSModel)
     """
     avg_n = 1 - 1 / (1 + prod(m.B))
     return avg_n^2
+end
+
+# Hack to emulate a "static" variable G only visible within this functions's scope
+# Seems this is the best existing option?
+# https://discourse.julialang.org/t/const-static-function-parameters/1803/32
+let
+    G = Vector{Float64}()
+    global function measure_electron_greens(m::SSModel,)
+        """ Measures Gₑ(τ, τ+Δ) ≡ M⁻¹_{τ, τ+Δ} for all values of Δ.
+            Returns [G(0), G(Δτ), G(2Δτ), ..., G((L-1)Δτ].
+
+            The way this functions computes this relies on the commutation of B's
+            in the single-site limit.
+        """
+        @unpack N, B = m 
+
+        W = 1 + prod(B)
+
+        resize!(G, N)
+        G .= 0
+
+        # G(0) = W⁻¹, so put N here to cancel out with final normalization
+        G[1] = N
+
+        for τ in 1:N
+            acc = 1.0
+            for Δ in 1:N-1
+                τ′ = mod1(τ+Δ, N)
+                acc *= B[τ′]
+                G[Δ+1] += acc
+            end
+        end
+
+        ## Uncomment below to only use lower triangle for measurements
+        # for τ in 1:N
+        #     acc = 1.0
+        #     for Δ in 1:N-τ
+        #         τ′ = mod1(τ+Δ, N)
+        #         acc *= B[τ′]
+        #         G[Δ+1] += acc
+        #     end
+        # end
+
+        # for Δ in 0:N-1
+        #     G[Δ+1] /= (W * (N - Δ))
+        # end
+
+        G ./= (W * N)
+        return G
+    end
+end
+
+let
+    G = Vector{Float64}()
+    global function measure_electron_greens_heavy(m::SSModel,)
+        """ Measures Gₑ(τ, τ+Δ) ≡ M⁻¹_{τ, τ+Δ} for all values of Δ.
+            Returns [G(0), G(Δτ), G(2Δτ), ..., G((L-1)Δτ].
+
+            This version must be correct, but is slow.
+        """
+        @unpack N, B = m 
+
+        # Build the entire M⁻¹ matrix!
+        Minv = zeros(N, N)
+
+        temp = zeros(N)
+        for i in 1:N
+            temp2 = zeros(N)
+            temp2[i] = 1.0
+            apply_hubbard_inverse(m, temp2, temp)
+            Minv[1:end, i] .= temp
+        end
+
+        resize!(G, N)
+        G .= 0
+
+        # Now, make the measurements
+
+        for τ in 1:N
+            for Δ in 0:N-1
+                τ′ = mod1(τ + Δ, N)
+                G[Δ+1] += Minv[τ′, τ] * ifelse(τ′ >= τ, 1, -1)
+            end
+        end
+
+        G ./= N
+        return G, Minv
+    end
+end
+
+let
+    G = Vector{Float64}()
+    global function measure_phonon_greens(m::SSModel)
+        """ Measures Gₚ(τ, τ+Δ) ≡ ⟨X_{τ+Δ} X_{τ}⟩ for all values of Δ.
+            Returns [G(0), G(Δτ), G(2Δτ), ..., G((L-1)Δτ].
+        """
+        @unpack N, B = m 
+
+        resize!(G, m.N)
+        G .= 0
+
+        for τ in 1:N
+            for Δ in 0:N-1
+                τ′ = mod1(τ+Δ, N)
+                G[Δ+1] += m.x[τ] * m.x[τ′]
+            end
+        end
+
+        G ./= N
+        return G
+    end
 end
 
 #= Stochastic Measurement Routines =#
