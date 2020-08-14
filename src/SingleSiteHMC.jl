@@ -96,7 +96,7 @@ function simulate(; seed::Int, β=2., dt=0.1, nsteps=10, m_reg=0.4)
 end
 
 function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfaststeps=4,
-                              m_reg=0.4, use_fa=true, dτ_target=0.1)
+                              m_reg=0.4, use_fa=true, dτ_target=0.1, run_samples=500000)
     N = round(Int, β/dτ_target)
     Δτ = β / N
     if Δτ ≠ dτ_target
@@ -124,7 +124,6 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
         sample!(model, dyn)
     end
 
-    run_samples = 1000000
     total_num_rejects = 0
 
     pot_meas = zeros(Float64, run_samples)

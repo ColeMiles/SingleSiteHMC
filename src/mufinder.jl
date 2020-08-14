@@ -32,7 +32,7 @@ mutable struct MuTuner
     κ_var       :: Float64
 
     function MuTuner(init_μ::Float64, target_N::Float64, β::Float64, forgetful_c::Float64; ninit::Int64=10)
-        μ_traj = fill(init_μ, ninit)
+        μ_traj = fill(init_μ, max(1, ninit))
         N_traj = fill(target_N, ninit)
         κ_traj = fill(1.0, ninit)
 
@@ -53,7 +53,7 @@ mutable struct MuTuner
 end
 
 
-function update_μ!(tuner::MuTuner, N::Float64, N²::Float64) :: Float64
+function update_μ!(tuner::MuTuner, N::Float64, N²::Float64; min_kappa::Float64=nothing) :: Float64
     """ Given a MuTuner, and a new set of measurements for N, N²,
          updates the MuTuner and returns the new value of μ.
     """
@@ -65,9 +65,16 @@ function update_μ!(tuner::MuTuner, N::Float64, N²::Float64) :: Float64
 
     tuner.μ̄ = forgetful_mean(μ_traj, forgetful_c, tuner.μ̄)
     tuner.N̄ = forgetful_mean(N_traj, forgetful_c, tuner.N̄)
-    (tuner.κ̄, tuner.κ_var) = forgetful_mean_var(κ_traj, forgetful_c, tuner.κ̄, tuner.κ_var)
 
-    new_μ = tuner.μ̄ + (target_N - tuner.N̄) / max(tuner.κ̄, sqrt(tuner.κ_var) / sqrt(length(κ_traj)))
+    if !isnothing(min_kappa)
+        tuner.κ̄ = forgetful_mean(κ_traj, forgetful_c, tuner.κ̄)
+        κ_update = max(tuner.κ̄, min_kappa / sqrt(length(κ_traj)))
+    else
+        (tuner.κ̄, tuner.κ_var) = forgetful_mean_var(κ_traj, forgetful_c, tuner.κ̄, tuner.κ_var)
+        κ_update = max(tuner.κ̄, sqrt(tuner.κ_var) / sqrt(length(κ_traj)))
+    end
+
+    new_μ = tuner.μ̄ + (target_N - tuner.N̄) / κ_update
     tuner.μ = new_μ
     push!(μ_traj, new_μ)
 
@@ -75,6 +82,9 @@ function update_μ!(tuner::MuTuner, N::Float64, N²::Float64) :: Float64
 end
 
 function update_μ!(tuner::MuTuner, R::Vector{Float64}, M⁻¹R::Vector{Float64}, M⁻ᵀR::Vector{Float64}) :: Float64
+    """ Given a MuTuner, a random Gaussian vector R, and M⁻¹R, M⁻ᵀR,
+         updates the MuTuner and returns the new value of μ.
+    """
     L = length(R)
     N = (2 / L) * (R' * (R - M⁻¹R))
     N² = N^2 + (2 / L^2) * (-sum((2R - M⁻¹R - M⁻ᵀR).^2) + M⁻ᵀR' * (R - M⁻¹R))
@@ -118,6 +128,11 @@ end
 #= These assume that only one update has happened since the last call =#
 
 function forgetful_mean(data::Vector{Float64}, c::Float64, prev_mean::Float64)
+    # Short-circuit if this is the first element of the series
+    if length(data) == 1
+        return data[1]
+    end
+
     cutoff = ceil(Int64, (1.0 - c) * length(data))
     prev_cutoff = ceil(Int64, (1.0 - c) * (length(data) - 1))
 
@@ -160,7 +175,7 @@ end
 
 function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64, 
                 nsteps::Int64; ninit::Int64=10, stochastic=false, n_sto_avg=1,
-                forgetful_c::Float64=0.5, exact=false)
+                forgetful_c::Float64=0.5, min_kappa::Float64=nothing)
     """ Performs the full μ-finding algorithm to attempt to discover the μ
          which places the given model at the desired N. Progresses only for 
          the given number of steps.
@@ -198,17 +213,14 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
         accept = sample!(model, dyn)
         push!(accepts, accept)
 
-        if exact
-            N = mean_occupancy(model) + sqrt(0.2) * randn()
-            N² = mean_occupancy_sq(model) + sqrt(0.2) * randn()
-        elseif stochastic
+        if stochastic
             (N, N²) = sto_measure_occupations(model; n_avg=n_sto_avg)
         else
             N = measure_mean_occupation(model)
             N² = measure_mean_sq_occupation(model)
         end
 
-        new_μ = update_μ!(tuner, N, N²)
+        new_μ = update_μ!(tuner, N, N², min_kappa=min_kappa)
         model.μ = new_μ
 
         # Record a lot of measurements we want to track
@@ -328,7 +340,7 @@ end
 
 function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0, m_reg=0.4, ninit=10,
                       dt=0.8, nsteps=4, nfaststeps=8, N_target=1.0, nsearch=500000, plot=true,
-                      stochastic=false, n_sto_avg=1, exact=false, forgetful_c=0.5)
+                      stochastic=false, n_sto_avg=1, forgetful_c=0.5, min_kappa=nothing)
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
     Δτ = β / N
@@ -346,7 +358,7 @@ function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0,
 
     results = find_μ(model, dyn, N_target, nsearch,
                      ninit=ninit, stochastic=stochastic,
-                     n_sto_avg=n_sto_avg, forgetful_c=forgetful_c, exact=exact)
+                     n_sto_avg=n_sto_avg, forgetful_c=forgetful_c, min_kappa=min_kappa)
 
     μ_target = numeric_μ(β, N_target; ω₀=ω₀, λ=λ)
     target_model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=ω₀, λ=λ, μ=μ_target, m_reg=m_reg)
