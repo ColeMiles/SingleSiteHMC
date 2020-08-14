@@ -11,7 +11,6 @@ struct Results
     μ̄_traj          :: Vector{Float64}
     N̄_traj          :: Vector{Float64}
     κ̄_traj          :: Vector{Float64}
-    κ_var_traj      :: Vector{Float64}
     phonon_pot_traj :: Vector{Float64}
     phonon_kin_traj :: Vector{Float64}
     N²_traj         :: Vector{Float64}
@@ -29,12 +28,12 @@ mutable struct MuTuner
     μ̄           :: Float64
     N̄           :: Float64
     κ̄           :: Float64
-    κ_var       :: Float64
+    κ_min       :: Float64
 
-    function MuTuner(init_μ::Float64, target_N::Float64, β::Float64, forgetful_c::Float64; ninit::Int64=10)
-        μ_traj = fill(init_μ, max(1, ninit))
-        N_traj = fill(target_N, ninit)
-        κ_traj = fill(1.0, ninit)
+    function MuTuner(init_μ::Float64, target_N::Float64, β::Float64, forgetful_c::Float64; κ_min::Float64=0.1)
+        μ_traj = [init_μ]
+        N_traj = Vector{Float64}()
+        κ_traj = Vector{Float64}()
 
         return new(
             μ_traj,
@@ -45,34 +44,28 @@ mutable struct MuTuner
             β,
             target_N,
             init_μ,
-            target_N,
-            1.0,
-            0.0
+            -1.0,
+            0.0,
+            κ_min
         )
     end
 end
 
-
-function update_μ!(tuner::MuTuner, N::Float64, N²::Float64; min_kappa::Float64=nothing) :: Float64
+function update_μ!(tuner::MuTuner, N::Float64, N²::Float64) :: Float64
     """ Given a MuTuner, and a new set of measurements for N, N²,
          updates the MuTuner and returns the new value of μ.
     """
-    @unpack μ_traj, N_traj, κ_traj, forgetful_c, β, target_N = tuner
-
-    κ = β * (N² - 2 * N * tuner.N̄ + tuner.N̄^2)
-    push!(N_traj, N)
-    push!(κ_traj, κ)
+    @unpack μ_traj, N_traj, κ_traj, forgetful_c, β, target_N, κ_min = tuner
 
     tuner.μ̄ = forgetful_mean(μ_traj, forgetful_c, tuner.μ̄)
+
+    push!(N_traj, N)
     tuner.N̄ = forgetful_mean(N_traj, forgetful_c, tuner.N̄)
 
-    if !isnothing(min_kappa)
-        tuner.κ̄ = forgetful_mean(κ_traj, forgetful_c, tuner.κ̄)
-        κ_update = max(tuner.κ̄, min_kappa / sqrt(length(κ_traj)))
-    else
-        (tuner.κ̄, tuner.κ_var) = forgetful_mean_var(κ_traj, forgetful_c, tuner.κ̄, tuner.κ_var)
-        κ_update = max(tuner.κ̄, sqrt(tuner.κ_var) / sqrt(length(κ_traj)))
-    end
+    κ = β * (N² - 2 * N * tuner.N̄ + tuner.N̄^2)
+    push!(κ_traj, κ)
+    tuner.κ̄ = forgetful_mean(κ_traj, forgetful_c, tuner.κ̄)
+    κ_update = max(tuner.κ̄, κ_min / sqrt(length(κ_traj)))
 
     new_μ = tuner.μ̄ + (target_N - tuner.N̄) / κ_update
     tuner.μ = new_μ
@@ -98,7 +91,6 @@ function cat_results(res_a::Results, res_b::Results)
     μ̄_traj = cat(res_a.μ̄_traj, res_b.μ̄_traj)
     N̄_traj = cat(res_a.N̄_traj, res_b.N̄_traj)
     κ̄_traj = cat(res_a.κ̄_traj, res_b.κ̄_traj)
-    κ_var_traj = cat(res_a.κ_var_traj, res_b.κ_var_traj)
     phonon_pot_traj = cat(res_a.phonon_pot_traj, res_b.phonon_pot_traj)
     phonon_kin_traj = cat(res_a.phonon_kin_traj, res_b.phonon_kin_traj)
     N²_traj = cat(res_a.N²_traj, res_b.N²_traj)
@@ -106,7 +98,7 @@ function cat_results(res_a::Results, res_b::Results)
     Results(
         μ_traj, N_traj, κ_traj,
         μ̄_traj, N̄_traj, κ̄_traj,
-        κ_var_traj, phonon_pot_traj,
+        phonon_pot_traj,
         phonon_kin_traj, N²_traj,
         accepts
     )
@@ -174,8 +166,8 @@ function forgetful_mean_var(data::Vector{Float64}, c::Float64, prev_mean::Float6
 end
 
 function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64, 
-                nsteps::Int64; ninit::Int64=10, stochastic=false, n_sto_avg=1,
-                forgetful_c::Float64=0.5, min_kappa::Float64=nothing)
+                nsteps::Int64; stochastic=false, n_sto_avg=1,
+                forgetful_c::Float64=0.5, κ_min::Float64=nothing)
     """ Performs the full μ-finding algorithm to attempt to discover the μ
          which places the given model at the desired N. Progresses only for 
          the given number of steps.
@@ -184,12 +176,11 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
     """
     β = model.Δτ * model.N
 
-    tuner = MuTuner(model.μ, targetN, β, forgetful_c; ninit=ninit)
+    tuner = MuTuner(model.μ, targetN, β, forgetful_c; κ_min=κ_min)
 
     μ̄_traj = Vector{Float64}()
     N̄_traj = Vector{Float64}()
     κ̄_traj = Vector{Float64}()
-    κ_var_traj = Vector{Float64}()
     phonon_pot_traj = Vector{Float64}()
     phonon_kin_traj = Vector{Float64}()
     N²_traj = Vector{Float64}()
@@ -197,7 +188,6 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
     sizehint!(μ̄_traj, nsteps)
     sizehint!(N̄_traj, nsteps)
     sizehint!(κ̄_traj, nsteps)
-    sizehint!(κ_var_traj, nsteps)
     sizehint!(phonon_pot_traj, nsteps)
     sizehint!(phonon_kin_traj, nsteps)
     sizehint!(N²_traj, nsteps)
@@ -220,14 +210,13 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
             N² = measure_mean_sq_occupation(model)
         end
 
-        new_μ = update_μ!(tuner, N, N², min_kappa=min_kappa)
+        new_μ = update_μ!(tuner, N, N²)
         model.μ = new_μ
 
         # Record a lot of measurements we want to track
         push!(μ̄_traj, tuner.μ̄)
         push!(N̄_traj, tuner.N̄)
         push!(κ̄_traj, tuner.κ̄)
-        push!(κ_var_traj, tuner.κ_var)
         push!(phonon_pot_traj, measure_potential_energy(model))
         push!(phonon_kin_traj, measure_kinetic_energy(model))
         push!(N²_traj, N²)
@@ -235,7 +224,7 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
 
     return Results(
         tuner.μ_traj, tuner.N_traj, tuner.κ_traj,
-        μ̄_traj, N̄_traj, κ̄_traj, κ_var_traj,
+        μ̄_traj, N̄_traj, κ̄_traj,
         phonon_pot_traj, phonon_kin_traj, N²_traj,
         accepts
     )
@@ -257,7 +246,6 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
     μ̄_traj = Vector{Float64}()
     N̄_traj = Vector{Float64}()
     κ̄_traj = Vector{Float64}()
-    κ_var_traj = Vector{Float64}()
     phonon_pot_traj = Vector{Float64}()
     phonon_kin_traj = Vector{Float64}()
     N²_traj = Vector{Float64}()
@@ -266,7 +254,6 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
     sizehint!(κ_traj, nsteps+1)
     sizehint!(N̄_traj, nsteps+1)
     sizehint!(κ̄_traj, nsteps+1)
-    sizehint!(κ_var_traj, nsteps)
     sizehint!(phonon_pot_traj, nsteps+1)
     sizehint!(phonon_kin_traj, nsteps+1)
     sizehint!(N²_traj, nsteps+1)
@@ -287,10 +274,8 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
         push!(κ_traj, κ)
 
         N̄ = forgetful_mean(N_traj, forgetful_c, N̄)
-        (κ̄, κ_var) = forgetful_mean_var(κ_traj, forgetful_c, κ̄, κ_var)
         push!(N̄_traj, N̄)
         push!(κ̄_traj, κ̄)
-        push!(κ_var_traj, κ_var)
 
         push!(phonon_pot_traj, measure_potential_energy(model))
         push!(phonon_kin_traj, measure_kinetic_energy(model))
@@ -300,7 +285,7 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
 
     return Results(
         μ_traj, N_traj, κ_traj,
-        μ̄_traj, N̄_traj, κ̄_traj, κ_var_traj,
+        μ̄_traj, N̄_traj, κ̄_traj,
         phonon_pot_traj, phonon_kin_traj, N²_traj,
         accept_traj
     )
@@ -338,9 +323,9 @@ function plot_μ_finding(N_target::Float64, μ_target::Float64, κ_target::Float
     end
 end
 
-function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0, m_reg=0.4, ninit=10,
+function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0, m_reg=0.4,
                       dt=0.8, nsteps=4, nfaststeps=8, N_target=1.0, nsearch=500000, plot=true,
-                      stochastic=false, n_sto_avg=1, forgetful_c=0.5, min_kappa=nothing)
+                      stochastic=false, n_sto_avg=1, forgetful_c=0.5, κ_min=0.1)
     Δτ_target = 0.1
     N = round(Int, β/Δτ_target)
     Δτ = β / N
@@ -357,8 +342,8 @@ function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0,
     )
 
     results = find_μ(model, dyn, N_target, nsearch,
-                     ninit=ninit, stochastic=stochastic,
-                     n_sto_avg=n_sto_avg, forgetful_c=forgetful_c, min_kappa=min_kappa)
+                     stochastic=stochastic, n_sto_avg=n_sto_avg,
+                     forgetful_c=forgetful_c, κ_min=κ_min)
 
     μ_target = numeric_μ(β, N_target; ω₀=ω₀, λ=λ)
     target_model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=ω₀, λ=λ, μ=μ_target, m_reg=m_reg)
