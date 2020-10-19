@@ -51,6 +51,31 @@ mutable struct MuTuner
     end
 end
 
+function estimate_μ(tuner::MuTuner)::Tuple{Float64,Float64}
+    """ Returns the best guess at the correct μ, and an estimate
+         of our uncertainty in this μ.
+    """
+    μ̄ = tuner.μ̄
+
+    # Run through and reconstruct the N̄ and κ̄ trajectories
+    N̄ = tuner.N_traj[1]
+    κ̄ = tuner.κ_traj[1]
+    N̄_traj = Vector{Float64}()
+    κ̄_traj = Vector{Float64}()
+    sizehint!(N̄_traj, length(tuner.N_traj))
+    sizehint!(κ̄_traj, length(tuner.κ_traj))
+    for i in 1:length(tuner.N_traj)
+        N̄ = forgetful_mean((@view tuner.N_traj[1:i]), tuner.c, N̄)
+        κ̄ = forgetful_mean((@view tuner.κ_traj[1:i]), tuner.c, κ̄)
+        push!(N̄_traj, N̄)
+        push!(κ̄_traj, κ̄)
+    end
+
+    μ_corrections = (tuner.target_N .- N̄_traj) ./ κ̄_traj
+    err_μ = mean(μ_corrections[c*length(μ_correction):end])
+    return (μ̄, err_μ)
+end
+
 function update_μ!(tuner::MuTuner, N::Float64, N²::Float64) :: Float64
     """ Given a MuTuner, and a new set of measurements for N, N²,
          updates the MuTuner and returns the new value of μ.
@@ -80,7 +105,7 @@ function update_μ!(tuner::MuTuner, R::Vector{Float64}, M⁻¹R::Vector{Float64}
     """
     L = length(R)
     N = (2 / L) * (R' * (R - M⁻¹R))
-    N² = N^2 + (2 / L^2) * (-sum((2R - M⁻¹R - M⁻ᵀR).^2) + M⁻ᵀR' * (R - M⁻¹R))
+    N² = N^2 + (2 / L^2) * (-sum((2R - M⁻¹R - M⁻ᵀR).^2))
     return update_μ!(tuner, N, N²)
 end
 
@@ -106,12 +131,12 @@ end
 
 #= Linear-time "forgetful" mean and variance : For comparison =#
 
-function forgetful_mean(data::Vector{Float64}, c::Float64)
+function forgetful_mean(data::AbstractVector{Float64}, c::Float64)
     cutoff = ceil(Int64, (1.0 - c) * length(data))
     return mean(data[cutoff:end])
 end
 
-function forgetful_var(data::Vector{Float64}, c::Float64)
+function forgetful_var(data::AbstractVector{Float64}, c::Float64)
     cutoff = ceil(Int64, (1.0 - c) * length(data))
     return var(data[cutoff:end]; corrected=true)
 end
@@ -119,7 +144,7 @@ end
 #= Constant-time "forgetful" mean and variance =# 
 #= These assume that only one update has happened since the last call =#
 
-function forgetful_mean(data::Vector{Float64}, c::Float64, prev_mean::Float64)
+function forgetful_mean(data::AbstractVector{Float64}, c::Float64, prev_mean::Float64)
     # Short-circuit if this is the first element of the series
     if length(data) == 1
         return data[1]
@@ -138,7 +163,7 @@ function forgetful_mean(data::Vector{Float64}, c::Float64, prev_mean::Float64)
 end
 
 # Welford's online algorithm
-function forgetful_mean_var(data::Vector{Float64}, c::Float64, prev_mean::Float64, prev_var::Float64)
+function forgetful_mean_var(data::AbstractVector{Float64}, c::Float64, prev_mean::Float64, prev_var::Float64)
     cutoff = ceil(Int64, (1.0 - c) * length(data))
     prev_cutoff = ceil(Int64, (1.0 - c) * (length(data) - 1))
 
@@ -293,34 +318,32 @@ end
 
 function plot_μ_finding(N_target::Float64, μ_target::Float64, κ_target::Float64,
                         results::Results; instant=false)
-    pyplot()
     @unpack μ_traj, N_traj, κ_traj, μ̄_traj, N̄_traj, κ̄_traj = results
-    nburn = length(μ_traj) - length(μ̄_traj)
-    nsteps = length(μ_traj)
+    nsteps = length(μ̄_traj)
 
-    x_min = instant ? 1 : nburn + 1
-    plot(xlims=(x_min, nsteps), xscale=:log10, xlabel="Step", size=(800, 600))
+    plot(xlims=(1, nsteps), xscale=:log10, xlabel="Step", size=(800, 600))
 
     # if instant
     #     plot!(κ_traj, label=L"\kappa", linecolor=:lightgreen)
     # end
-    plot!(nburn+1:nsteps, κ̄_traj, label=L"\bar{\kappa}", linecolor=:darkgreen)
-    plot!([κ_target], seriestype=:hline, linestyle=:dash, label=L"\kappa^\ast", linecolor=:limegreen)
+    plot!(κ̄_traj, label=L"\bar{\kappa}", linecolor=:darkgreen)
+    hline!([κ_target], linestyle=:dash,
+          label=L"\kappa^\ast", linecolor=:limegreen, lw=2)
 
     if instant
         plot!(N_traj, label=L"N", linecolor=:red)
     end
-    plot!(nburn+1:nsteps, N̄_traj, label=L"\bar{N}", linecolor=:darkred)
-    plot!([N_target], seriestype=:hline, linestyle=:dash, label=L"N^\ast", linecolor=:red)
+    plot!(N̄_traj, label=L"\bar{N}", linecolor=:darkred)
+    hline!([N_target], linestyle=:dash,
+          label=L"N^\ast", linecolor=:red, lw=2)
 
     if instant
         plot!(μ_traj, label=L"\mu", linecolor=:lightblue)
     end
-    plot!(nburn+1:nsteps, μ̄_traj, label=L"\bar{\mu}", linecolor=:navyblue)
-    plot!([μ_target], seriestype=:hline, linestyle=:dash, label=L"\mu^\ast", linecolor=:purple)
-    if instant
-        plot!([nburn], seriestype=:vline, linestyle=:dash, label="End Init", linecolor=:black) 
-    end
+    plot!(μ̄_traj, label=L"\bar{\mu}", linecolor=:navyblue)
+    hline!([μ_target], linestyle=:dash,
+          label=L"\mu^\ast", linecolor=:purple, lw=2)
+    return plot!()
 end
 
 function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0, m_reg=0.4,
@@ -346,8 +369,7 @@ function test_μ_find(;seed::Int64=12345, β=2., ω₀=1., λ=√2, μinit=-1.0,
                      forgetful_c=forgetful_c, κ_min=κ_min)
 
     μ_target = numeric_μ(β, N_target; ω₀=ω₀, λ=λ)
-    target_model = SSModel(seed=seed, N=N, Δτ=Δτ, ω₀=ω₀, λ=λ, μ=μ_target, m_reg=m_reg)
-    κ_target = mean_kappa(target_model)
+    κ_target = analytic_κ(β, μ_target; ω₀=ω₀, λ=λ)
     if plot
         plot_μ_finding(N_target, μ_target, κ_target, results)
     end
@@ -359,6 +381,14 @@ function analytic_n(β, μ; ω₀=1., λ=√2)
     μ₀ = -λ^2 / ω₀^2
     numer = 2 * exp(β * (μ - μ₀/2)) + 2 * exp(2 * β * (μ - μ₀))
     denom = 1 + 2 * exp(β * (μ - μ₀/2)) + exp(2 * β * (μ - μ₀))
+    return numer / denom
+end
+
+function analytic_κ(β, μ; ω₀=1., λ=√2)
+    exp1 = exp(β * (λ^2 / (2 * ω₀^2) + μ))
+    exp2 = exp(2 * β * (λ^2 / ω₀^2 + μ))
+    numer = 2β * ((1 + 2exp1 + exp2) * (exp1 + 2exp2) - (2exp1 + 2exp2) * (exp1 + exp2))
+    denom = (1 + 2exp1 + exp2)^2
     return numer / denom
 end
 

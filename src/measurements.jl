@@ -250,7 +250,9 @@ function sto_measure_occupations(m::SSModel; n_avg=1)
         apply_hubbard_inverse(m, R, α₂; transpose=true)
 
         N_measure = (2. / L) * (R' * (R - α₁))
-        N²_measure = N_measure ^ 2 + (2. / L^2) * (-sum((2R - α₁ - α₂).^2) + α₂' * (R - α₁))
+        # N²_measure = N_measure ^ 2 + (2. / L^2) * (-sum((2R - α₁ - α₂).^2) + α₂' * (R - α₁))
+        # TEST: UNDO AFTER
+        N²_measure = N_measure ^ 2 + (2. / L^2) * (-sum((2R - α₁ - α₂).^2))
 
         N_measure_acc += N_measure
         N²_measure_acc += N²_measure

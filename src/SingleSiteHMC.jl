@@ -126,6 +126,7 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
 
     total_num_rejects = 0
 
+    accepts = zeros(Bool, run_samples)
     pot_meas = zeros(Float64, run_samples)
     kin_meas = zeros(Float64, run_samples)
     occ_meas = zeros(Float64, run_samples)
@@ -135,8 +136,7 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
     phonon_green_meas = zeros(Float64, N, run_samples)
 
     for step in 1:run_samples
-        total_num_rejects += !sample!(model, dyn)
-
+        accepts[step] = sample!(model, dyn)
         pot_meas[step] = measure_potential_energy(model)
         kin_meas[step] = measure_kinetic_energy(model)
         occ_meas[step] = measure_mean_occupation(model)
@@ -150,7 +150,7 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
     measurements = [pot_meas, kin_meas, occ_meas, occ_sq_meas, doub_occ_meas]
     exact_functions = [mean_potential, mean_kinetic, mean_occupancy, mean_occupancy_sq, mean_double_occupancy]
 
-    accept_prob = (run_samples - total_num_rejects) / run_samples
+    accept_prob = sum(accepts) / run_samples
     measurement_dict = Dict{String, Any}()
 
     for (obs, meas, exact) in zip(observable_names, measurements, exact_functions)
@@ -188,7 +188,54 @@ function multistep_simulate(; seed::Int, β=2., μ=-2.5, dt=0.1, nsteps=10, nfas
     end
     measurement_dict["Phonon Greens"] = (copy(G_μ), copy(G_σ))
 
-    return accept_prob, measurement_dict
+    # Package full trajectories into "Results" structure
+    # For comparison to μ-tuning, compute some extra statistics
+    res = create_results(
+        μ, β, occ_meas, pot_meas, kin_meas, occ_sq_meas, accepts
+    )
+
+    return accept_prob, measurement_dict, res
+end
+
+function create_results(μ, β, N_traj, pot_traj, kin_traj, N²_traj, accepts; c=0.5)
+    """ Given statistics from a fixed-μ simulation, create a Results object
+         with statistics comparable to a μ-tuning simulation
+    """
+    N̄ = N_traj[1]
+    κ̄ = 0.0
+    num_samples = length(N_traj)
+    μ_traj = fill(μ, num_samples)
+    μ̄_traj = fill(μ, num_samples)
+    N̄_traj = Vector{Float64}()
+    κ_traj = Vector{Float64}()
+    κ̄_traj = Vector{Float64}()
+    sizehint!(N̄_traj, num_samples)
+    sizehint!(κ_traj, num_samples)
+    sizehint!(κ̄_traj, num_samples)
+
+    for i in 1:num_samples
+        N̄ = forgetful_mean(N_traj[1:i], c, N̄)
+        push!(N̄_traj, N̄)
+        κ = β * (N²_traj[i] - 2 * N_traj[i] * N̄ + N̄^2)
+        push!(κ_traj, κ)
+        κ̄ = forgetful_mean(κ_traj[1:i], c, κ̄)
+        push!(κ̄_traj, κ̄)
+    end
+
+    res = Results(
+        μ_traj,
+        N_traj,
+        κ_traj,
+        μ̄_traj,
+        N̄_traj,
+        κ̄_traj,
+        pot_traj,
+        kin_traj,
+        N²_traj,
+        accepts
+    )
+
+    return res
 end
 
 end
