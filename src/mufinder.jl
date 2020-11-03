@@ -20,30 +20,35 @@ end
 mutable struct MuTuner
     μ_traj      :: Vector{Float64}
     N_traj      :: Vector{Float64}
-    κ_traj      :: Vector{Float64}
+    N²_traj     :: Vector{Float64}
+    κ̄_traj      :: Vector{Float64}
     forgetful_c :: Float64
     μ           :: Float64
     β           :: Float64
     target_N    :: Float64
     μ̄           :: Float64
     N̄           :: Float64
+    N̄²          :: Float64  # Avg (N²), not (Avg N)²
     κ̄           :: Float64
     κ_min       :: Float64
 
     function MuTuner(init_μ::Float64, target_N::Float64, β::Float64, forgetful_c::Float64; κ_min::Float64=0.1)
         μ_traj = [init_μ]
         N_traj = Vector{Float64}()
-        κ_traj = Vector{Float64}()
+        N²_traj = Vector{Float64}()
+        κ̄_traj = Vector{Float64}()
 
         return new(
             μ_traj,
             N_traj,
-            κ_traj,
+            N²_traj,
+            κ̄_traj,
             forgetful_c,
             init_μ,
             β,
             target_N,
             init_μ,
+            -1.0,
             -1.0,
             0.0,
             κ_min
@@ -57,22 +62,18 @@ function estimate_μ(tuner::MuTuner)::Tuple{Float64,Float64}
     """
     μ̄ = tuner.μ̄
 
-    # Run through and reconstruct the N̄ and κ̄ trajectories
+    # Run through and reconstruct the N̄ trajectories
     N̄ = tuner.N_traj[1]
-    κ̄ = tuner.κ_traj[1]
+    κ̄ = tuner.κ̄_traj[1]
     N̄_traj = Vector{Float64}()
-    κ̄_traj = Vector{Float64}()
     sizehint!(N̄_traj, length(tuner.N_traj))
-    sizehint!(κ̄_traj, length(tuner.κ_traj))
     for i in 1:length(tuner.N_traj)
         N̄ = forgetful_mean((@view tuner.N_traj[1:i]), tuner.c, N̄)
-        κ̄ = forgetful_mean((@view tuner.κ_traj[1:i]), tuner.c, κ̄)
         push!(N̄_traj, N̄)
-        push!(κ̄_traj, κ̄)
     end
 
-    μ_corrections = (tuner.target_N .- N̄_traj) ./ κ̄_traj
-    err_μ = mean(μ_corrections[c*length(μ_correction):end])
+    μ_corrections = @. (tuner.target_N - N̄_traj) / tuner.κ̄_traj
+    err_μ = sqrt(mean(μ_corrections[c*length(μ_correction):end] .^ 2))
     return (μ̄, err_μ)
 end
 
@@ -80,17 +81,20 @@ function update_μ!(tuner::MuTuner, N::Float64, N²::Float64) :: Float64
     """ Given a MuTuner, and a new set of measurements for N, N²,
          updates the MuTuner and returns the new value of μ.
     """
-    @unpack μ_traj, N_traj, κ_traj, forgetful_c, β, target_N, κ_min = tuner
+    @unpack μ_traj, N_traj, N²_traj, κ̄_traj, forgetful_c, β, target_N, κ_min = tuner
 
     tuner.μ̄ = forgetful_mean(μ_traj, forgetful_c, tuner.μ̄)
 
     push!(N_traj, N)
     tuner.N̄ = forgetful_mean(N_traj, forgetful_c, tuner.N̄)
 
-    κ = β * (N² - 2 * N * tuner.N̄ + tuner.N̄^2)
-    push!(κ_traj, κ)
-    tuner.κ̄ = forgetful_mean(κ_traj, forgetful_c, tuner.κ̄)
-    κ_update = max(tuner.κ̄, κ_min / sqrt(length(κ_traj)))
+    push!(N²_traj, N²)
+    tuner.N̄² = forgetful_mean(N²_traj, forgetful_c, tuner.N̄²)
+
+    κ̄ = β * (tuner.N̄² - tuner.N̄^2)
+    push!(κ̄_traj, κ̄)
+    tuner.κ̄ = κ̄
+    κ_update = max(tuner.κ̄, κ_min / sqrt(length(κ̄_traj)))
 
     new_μ = tuner.μ̄ + (target_N - tuner.N̄) / κ_update
     tuner.μ = new_μ
@@ -248,7 +252,7 @@ function find_μ(model::SSModel, dyn::AbstractDynamics, targetN::Float64,
     end
 
     return Results(
-        tuner.μ_traj, tuner.N_traj, tuner.κ_traj,
+        tuner.μ_traj, tuner.N_traj, tuner.κ̄_traj,
         μ̄_traj, N̄_traj, κ̄_traj,
         phonon_pot_traj, phonon_kin_traj, N²_traj,
         accepts
