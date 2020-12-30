@@ -136,12 +136,12 @@ end
 #= Linear-time "forgetful" mean and variance : For comparison =#
 
 function forgetful_mean(data::AbstractVector{Float64}, c::Float64)
-    cutoff = ceil(Int64, (1.0 - c) * length(data))
+    cutoff = 1 + floor(Int64, (1.0 - c) * length(data))
     return mean(data[cutoff:end])
 end
 
 function forgetful_var(data::AbstractVector{Float64}, c::Float64)
-    cutoff = ceil(Int64, (1.0 - c) * length(data))
+    cutoff = 1 + floor(Int64, (1.0 - c) * length(data))
     return var(data[cutoff:end]; corrected=true)
 end
 
@@ -154,8 +154,8 @@ function forgetful_mean(data::AbstractVector{Float64}, c::Float64, prev_mean::Fl
         return data[1]
     end
 
-    cutoff = ceil(Int64, (1.0 - c) * length(data))
-    prev_cutoff = ceil(Int64, (1.0 - c) * (length(data) - 1))
+    cutoff = 1 + floor(Int64, (1.0 - c) * length(data))
+    prev_cutoff = 1 + floor(Int64, (1.0 - c) * (length(data) - 1))
 
     new_mean = (length(data) - prev_cutoff) * prev_mean
     if prev_cutoff != cutoff
@@ -168,8 +168,13 @@ end
 
 # Welford's online algorithm
 function forgetful_mean_var(data::AbstractVector{Float64}, c::Float64, prev_mean::Float64, prev_var::Float64)
-    cutoff = ceil(Int64, (1.0 - c) * length(data))
-    prev_cutoff = ceil(Int64, (1.0 - c) * (length(data) - 1))
+    # Short-circuit if this is the first element of the series
+    if length(data) == 1
+        return (data[1], 0.0)
+    end
+
+    cutoff = 1 + floor(Int64, (1.0 - c) * length(data))
+    prev_cutoff = 1 + floor(Int64, (1.0 - c) * (length(data) - 1))
 
     new_pt = data[end]
 
@@ -188,7 +193,12 @@ function forgetful_mean_var(data::AbstractVector{Float64}, c::Float64, prev_mean
 
         new_mean = prev_mean - (drop_pt - prev_mean) / new_length
         new_var = prev_var * new_length - (drop_pt - prev_mean) * (drop_pt - new_mean)
-        new_var /= new_length - 1
+        # Guard against new_length == 1
+        if new_length == 1
+            new_var = 0.0
+        else
+            new_var /= new_length - 1
+        end
     end
 
     return (new_mean, new_var)
@@ -266,13 +276,14 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
     β = model.N * model.Δτ
     μ = model.μ
     N̄ = measure_mean_occupation(model)
+    N̄² = measure_mean_sq_occupation(model)
     κ̄ = 1.0
     κ_var = 0.0
 
     μ_traj = fill(model.μ, nsteps)
-    N_traj = fill(targetN, ninit)
-    κ_traj = fill(1.0, ninit)
-    μ̄_traj = Vector{Float64}()
+    N_traj = Vector{Float64}()
+    κ_traj = Vector{Float64}()
+    μ̄_traj = fill(model.μ, nsteps)
     N̄_traj = Vector{Float64}()
     κ̄_traj = Vector{Float64}()
     phonon_pot_traj = Vector{Float64}()
@@ -298,17 +309,17 @@ function const_μ_traj(model::SSModel, dyn::AbstractDynamics, nsteps::Int64; sto
             N² = measure_mean_sq_occupation(model)
         end
 
-        κ = β * (N² - 2 * N * N̄ + N̄^2)
         push!(N_traj, N)
-        push!(κ_traj, κ)
-
+        push!(N²_traj, N²)
         N̄ = forgetful_mean(N_traj, forgetful_c, N̄)
+        N̄² = forgetful_mean(N²_traj, forgetful_c, N̄²)
         push!(N̄_traj, N̄)
-        push!(κ̄_traj, κ̄)
+        push!(κ_traj, N - N²)
+        push!(κ̄_traj, N̄² - N̄^2)
+
 
         push!(phonon_pot_traj, measure_potential_energy(model))
         push!(phonon_kin_traj, measure_kinetic_energy(model))
-        push!(N²_traj, N²)
         push!(accept_traj, accept)
     end
 

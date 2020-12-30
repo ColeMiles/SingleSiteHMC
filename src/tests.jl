@@ -1,3 +1,5 @@
+using Statistics
+
 function test_hubbard_matrix()
     m = SSModel(seed=0, N=10, Δτ=0.1, ω₀=1., λ=sqrt(2), μ=-2.)
     randomize!(m)
@@ -252,4 +254,46 @@ function test_update_μ_stochastic(;seed=12345, β=2., μinit=-1., targetN=1.)
     end
 
     return μ̄_traj
+end
+
+function _test_forgetful_mean(N, c)
+    avg = randn()
+    data = [avg]
+    for _ in 2:N
+        push!(data, randn())
+        avg = forgetful_mean(data, c, avg)
+    end
+
+    @assert avg ≈ mean(data[1 + floor(Int, (1.0 - c) * length(data)):end])
+end
+
+function test_forgetful_mean()
+    _test_forgetful_mean(1, 1.0)
+    _test_forgetful_mean(2, 0.5)
+    _test_forgetful_mean(10, 0.3)
+    _test_forgetful_mean(10, 1.0)
+    _test_forgetful_mean(100, 0.1)
+    _test_forgetful_mean(100, 0.9)
+end
+
+function _test_forgetful_mean_var(N, c)
+    avg = randn()
+    variance = 0.0
+    data = [avg]
+    for _ in 2:N
+        push!(data, randn())
+        (avg, variance) = forgetful_mean_var(data, c, avg, variance)
+    end
+
+    @assert avg ≈ mean(data[1 + floor(Int, (1.0 - c) * length(data)):end])
+    @assert variance ≈ var(data[1 + floor(Int, (1.0 - c) * length(data)):end])
+end
+
+function test_forgetful_mean_var()
+    _test_forgetful_mean_var(2, 1.0)
+    # _test_forgetful_mean_var(2, 0.5) breaks because the built-in var gives NaN
+    #   on length-1 Vectors
+    _test_forgetful_mean_var(10, 0.4)
+    _test_forgetful_mean_var(100, 0.73)
+    _test_forgetful_mean_var(1000, 0.24)
 end
